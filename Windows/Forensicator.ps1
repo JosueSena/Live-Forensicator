@@ -677,19 +677,44 @@ foreach ($process in $logonsession) {
   $logonsessionFragment += "</tr>"
 }
 
-$userprocesses = Get-Process -includeusername | Select-Object Name, Id, Username, CPU, Memory, Path 
-# Populate the HTML table with process information
-$userprocessesFragment = ""
-foreach ($process in $userprocesses) {
-  $userprocessesFragment += "<tr>"
-  $userprocessesFragment += "<td>$($process.Name)</td>"
-  $userprocessesFragment += "<td>$($process.Id)</td>"
-  $userprocessesFragment += "<td>$($process.UserName)</td>"
-  $userprocessesFragment += "<td>$($process.CPU)</td>"
-  $userprocessesFragment += "<td>$($process.Memory)</td>"
-  $userprocessesFragment += "<td>$($process.Path)</td>"
-  $userprocessesFragment += "</tr>"
+# Voltar2
+# Inicializar fragmento HTML
+$userAccountsFragment = ""
+
+# Obter dados dos usuários
+$localUsers = Get-WmiObject -Class Win32_UserAccount
+$date = Get-Date -Format "dd/MM/yyyy HH:mm"
+
+# Criar tabela HTML com informações dos usuários
+foreach ($user in $localUsers) {
+    $name = $user.Name
+    $status = if ($user.Disabled) { "Disabled" } else { "Enabled" }
+    $accountType = if ($user.LocalAccount) { "Local" } else { "Domain" }
+    
+    $userAccountsFragment += "<tr>"
+    $userAccountsFragment += "<td>$date</td>"
+    $userAccountsFragment += "<td>$name</td>"
+    $userAccountsFragment += "<td>$status</td>"
+    $userAccountsFragment += "<td>$accountType</td>"
+    $userAccountsFragment += "<td>$($user.Description)</td>"
+    $userAccountsFragment += "<td>$($user.FullName)</td>"
+    $userAccountsFragment += "</tr>"
 }
+
+
+# $userprocesses = Get-Process -includeusername | Select-Object Name, Id, Username, CPU, Memory, Path 
+# Populate the HTML table with process information
+#$userprocessesFragment = ""
+#foreach ($process in $userprocesses) {
+  #$userprocessesFragment += "<tr>"
+  #$userprocessesFragment += "<td>$($process.Name)</td>"
+  #$userprocessesFragment += "<td>$($process.Id)</td>"
+  #$userprocessesFragment += "<td>$($process.UserName)</td>"
+  #$userprocessesFragment += "<td>$($process.CPU)</td>"
+  #$userprocessesFragment += "<td>$($process.Memory)</td>"
+  #$userprocessesFragment += "<td>$($process.Path)</td>"
+ # $userprocessesFragment += "</tr>"
+#}
 
 #$userprofiles = Get-WmiObject -Class Win32_UserProfile | Select-object -property Caption, LocalPath, SID, @{Name = 'Last Used'; Expression = { $_.ConvertToDateTime($_.lastusetime) } } | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
 
@@ -745,9 +770,9 @@ Write-Host -Fore Cyan "[!] Done"
 
 Write-Host -Fore DarkCyan "[*] Gathering Installed Programs"
 
-#$InstProgs = Get-CimInstance -ClassName win32_product | Select-Object Name, Version, Vendor, InstallDate, InstallSource, PackageName, LocalPackage | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
+# Coleta informações sobre programas instalados usando Get-CimInstance
 $InstProgs = Get-CimInstance -ClassName win32_product | Select-Object Name, Version, Vendor, InstallDate, InstallSource, PackageName, LocalPackage
-# Populate the HTML table with process information
+# Popula a tabela HTML com informações dos programas instalados
 foreach ($process in $InstProgs) {
   $InstProgsFragment += "<tr>"
   $InstProgsFragment += "<td>$($process.Name)</td>"
@@ -760,10 +785,9 @@ foreach ($process in $InstProgs) {
   $InstProgsFragment += "</tr>"
 }
 
-#$InstalledApps = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-
+# Coleta informações sobre programas instalados acessando o registro do Windows
 $InstalledApps = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* | Select-Object DisplayName, DisplayVersion, Publisher, InstallDate
-# Populate the HTML table with process information
+# Popula a tabela HTML com informações dos programas instalados
 foreach ($process in $InstalledApps) {
   $InstalledAppsFragment += "<tr>"
   $InstalledAppsFragment += "<td>$($process.DisplayName)</td>"
@@ -773,11 +797,66 @@ foreach ($process in $InstalledApps) {
   $InstalledAppsFragment += "</tr>"
 }
 
+# Caminho para o sigcheck.exe
+$sigcheckPath = "C:\Windows\sigcheck.exe"
+
+# Verifica cada programa instalado com sigcheck
+foreach ($app in $InstalledApps) {
+  # Inicializa variáveis
+  $publisher = ""
+  $company = ""
+  $signature = ""
+  
+  # Tenta encontrar o caminho do executável
+  $possiblePaths = @(
+      "$($app.InstallLocation)\$($app.DisplayName).exe",
+      "${env:ProgramFiles}\$($app.DisplayName)\$($app.DisplayName).exe",
+      "${env:ProgramFiles(x86)}\$($app.DisplayName)\$($app.DisplayName).exe"
+  )
+
+  $fileFound = $false
+  foreach ($testPath in $possiblePaths) {
+      if (Test-Path $testPath) {
+          try {
+              # Executa o sigcheck.exe e captura a saída
+              $sigcheckOutput = & $sigcheckPath -nobanner $testPath
+
+              # Extração de Publisher e Company
+              $publisher = ($sigcheckOutput | Select-String -Pattern "Publisher:\s*(.+)").Matches.Groups[1].Value
+              $company = ($sigcheckOutput | Select-String -Pattern "Company:\s*(.+)").Matches.Groups[1].Value
+
+              # Verifica se o arquivo está assinado ou não
+              if ($sigcheckOutput -match "Verified:\s*Signed") {
+                  $signature = "Signed"
+              } elseif ($sigcheckOutput -match "Verified:\s*Unsigned") {
+                  $signature = "Unsigned"
+              }
+
+              $fileFound = $true
+              break  # Sai do loop se encontrou e verificou o arquivo
+          }
+          catch {
+              Write-Warning "Erro ao verificar $testPath"
+              continue
+          }
+      }
+  }
+
+  # Adiciona as informações à tabela HTML
+  $InstalledAppsFragment += "<tr>"
+  $InstalledAppsFragment += "<td>$($app.DisplayName)</td>"
+  $InstalledAppsFragment += "<td>$($app.DisplayVersion)</td>"
+  $InstalledAppsFragment += "<td>$($app.Publisher)</td>"
+  $InstalledAppsFragment += "<td>$($app.InstallDate)</td>"
+  $InstalledAppsFragment += "<td>$publisher</td>"
+  $InstalledAppsFragment += "<td>$company</td>"
+  $InstalledAppsFragment += "<td>$signature</td>"
+  $InstalledAppsFragment += "</tr>"
+}
 
 Write-Host -Fore Cyan "[!] Done"
 
 #endregion
-
 
 ##################################################
 #region System Info                              #
@@ -890,24 +969,57 @@ Write-Host -Fore Cyan "[!] Done"
 
 Write-Host -Fore DarkCyan "[*] Gathering Processes and Tasks"
 
-
+#voltar aqui
 #$Processes = Get-Process | Select-Object Handles, StartTime, PM, VM, SI, id, ProcessName, Path, Product, FileVersion | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
-$Processes = Get-Process | Select-Object Handles, StartTime, PM, VM, SI, id, ProcessName, Path, Product, FileVersion
-# Populate the HTML table with process information
+$Processes = Get-Process | Select-Object Handles, StartTime, PM, SI, id, ProcessName, Path, Product, FileVersion
 foreach ($process in $Processes) {
+  $hashes = $process | ForEach-Object {
+    if ($_.Path) {
+      (Get-FileHash -Path $_.Path -Algorithm SHA256).Hash
+    }
+  }
+
+  # Verifica a assinatura do arquivo usando sigcheck
+  $signature = $process | ForEach-Object {
+    if ($_.Path) {
+      $sigcheckOutput = & "C:\Windows\sigcheck.exe" -h -e -accepteula -nobanner $_.Path
+      
+      # Tenta extrair Publisher e Company
+      $publisher = try {
+        ($sigcheckOutput | Select-String -Pattern "Publisher:\s*(.+)").Matches.Groups[1].Value
+      } catch { $null }
+      
+      $company = try {
+        ($sigcheckOutput | Select-String -Pattern "Company:\s*(.+)").Matches.Groups[1].Value
+      } catch { $null }
+
+      if ($sigcheckOutput -match "Verified:\s*Signed") {
+        if (![string]::IsNullOrWhiteSpace($publisher)) {
+          $publisher
+        } elseif (![string]::IsNullOrWhiteSpace($company)) {
+          $company
+        } else {
+          "Unsigned"
+        }
+      } 
+    }
+  }
+
+  # Populate the HTML table with process information
   $ProcessesFragment += "<tr>"
-  $ProcessesFragment += "<td>$($process.Handles)</td>"
-  $ProcessesFragment += "<td>$($process.StartTime)</td>"
-  $ProcessesFragment += "<td>$($process.PM)</td>"
-  $ProcessesFragment += "<td>$($process.VM)</td>"
-  $ProcessesFragment += "<td>$($process.SI)</td>"
-  $ProcessesFragment += "<td>$($process.id)</td>"
   $ProcessesFragment += "<td>$($process.ProcessName)</td>"
+  $ProcessesFragment += "<td>$($process.Handles)</td>"
+  $ProcessesFragment += "<td>$($process.id)</td>"
+  $ProcessesFragment += "<td>$($process.PM)</td>"
+  $ProcessesFragment += "<td>$($signature)</td>"
+  $ProcessesFragment += "<td>$($hashes)</td>"
+  $ProcessesFragment += "<td>$($process.StartTime)</td>"
   $ProcessesFragment += "<td>$($process.Path)</td>"
   $ProcessesFragment += "<td>$($process.Product)</td>"
   $ProcessesFragment += "<td>$($process.FileVersion)</td>"
   $ProcessesFragment += "</tr>"
 }
+
 
 #Items set to run on startup
 #$StartupProgs = Get-WmiObject Win32_StartupCommand | Select-Object Command, User, Caption | ConvertTo-Html -As LIST -fragment | Select-Object -Skip 1 | Select-Object -SkipLast 1
@@ -3967,22 +4079,22 @@ function UserStyle {
         <!-- Export Datatable start -->
         <div class="card-box mb-30">
           <div class="pd-20">
-            <h4 class="text-blue h4">User Processes</h4>
+            <h4 class="text-blue h4">Check Users</h4>
           </div>
           <div class="pb-20">
             <table class="table hover multiple-select-row data-table-export nowrap ">
               <thead>
                 <tr>
-                  <th class="table-plus datatable-nosort">Name</th>
-                  <th>Id</th>
-                  <th>User Name</th>
-                  <th>CPU</th>
-                  <th>Memory</th>
-                  <th>Path</th>
+                  <th class="table-plus datatable-nosort">Timestamp</th>
+                  <th>Username</th>
+                  <th>Status</th>
+                  <th>Account Type</th>
+                  <th>Description</th>
+                  <th>Full Name</th>
                 </tr>
               </thead>
               <tbody>
-               $userprocessesFragment
+               $userAccountsFragment
              </tbody>
             </table>
           </div>
@@ -4369,6 +4481,7 @@ function SystemStyle {
                   <th>InstallSource</th>
                   <th>PackageName</th>
                   <th>LocalPackage</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -4851,16 +4964,16 @@ function ProcessStyle {
             <h4 class="text-blue h4">Processes</h4>
           </div>
           <div class="pb-20">
-            <table class="table hover multiple-select-row data-table-export nowrap">
+            <table class="table hover multiple-select-row data-table-export nowrap">    
               <thead>
                 <tr>
-                  <th class="table-plus datatable-nosort">Handles</th>
-                  <th>StartTime</th>
-                  <th>PM</th>
-                  <th>VM</th>
-                  <th>SI</th>
+                  <th class="table-plus datatable-nosort">ProcessName</th>     
+                  <th>Handles</th>
                   <th>id</th>
-                  <th>ProcessName</th>
+                  <th>PM</th>
+                  <th>Signature</th>
+                  <th>Hash</th>
+                  <th>StartTime</th>
                   <th>Path</th>
                   <th>Product</th>
                   <th>FileVersion</th>
